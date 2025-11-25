@@ -9,9 +9,56 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "node:crypto";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
+// node:fs, node:path, and node:os are no longer needed.
+
+// === 新增：上传模块 ===
+const URUSAI_API_URL = "https://api.urusai.cc/v1/upload";
+
+/**
+ * 将音频 Buffer 上传到 URUSAI! API.
+ * @param audioBuffer - 要上传的 MP3 音频 Buffer.
+ * @param filename - 在表单中指定的文件名.
+ * @returns 返回上传成功后的直接链接 (url_direct).
+ * @throws 如果上传失败或 API 返回错误，则抛出异常.
+ */
+async function uploadToUrusai(audioBuffer: Buffer, filename: string): Promise<string> {
+  const formData = new FormData();
+  
+  // URUSAI! API 要求 'file' 字段必须是 Blob 或 File 对象
+  const audioBlob = new Blob([new Uint8Array(audioBuffer)], { type: "audio/mpeg" });
+  formData.append("file", audioBlob, filename);
+
+  // 检查环境变量中是否有 token
+  const apiToken = process.env.URUSAI_API_TOKEN;
+  if (apiToken) {
+    formData.append("token", apiToken);
+  }
+
+  // R18 默认为 0
+  formData.append("r18", "0");
+
+  try {
+    const response = await fetch(URUSAI_API_URL, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`API request failed with status ${response.status}: ${await response.text()}`);
+    }
+
+    const result = await response.json();
+
+    if (result.status === "success" && result.data && result.data.url_direct) {
+      return result.data.url_direct;
+    } else {
+      throw new Error(`API returned an error: ${result.message || JSON.stringify(result)}`);
+    }
+  } catch (error: any) {
+    console.error(`[Upload Error] Failed to upload to URUSAI!: ${error.message}`);
+    throw error; // Re-throw the error to be caught by the handler
+  }
+}
 
 
 // === 1. 声音列表定义 (保持不变) ===
@@ -68,7 +115,6 @@ function splitText(text: string, maxWordCount: number = 100): string[] {
 
 // === 3. Edge TTS Client (保持不变) ===
 class EdgeTTSClient {
-  // ... (内部代码完全不变) ...
   private expiredAt: number | null = null;
   private endpoint: any = null;
   private clientId: string = uuidv4().replace(/-/g, "");
@@ -136,52 +182,27 @@ interface SpeechSegmentInput {
 
 interface SegmentResult {
   text: string; 
+  // 'audio_path' now holds the public URL of the uploaded audio.
   audio_list: { text: string; audio_path: string }[]; 
 }
 
 class EdgeTTSMcpServer {
   private server: Server;
   private ttsClient: EdgeTTSClient;
-  private readonly savePath: string;
+  // The 'savePath' property is no longer needed.
 
   constructor() {
     this.server = new Server(
-      { name: "edge-tts-server", version: "4.0.0-env-config" },
+      { name: "edge-tts-server", version: "4.0.0-online-upload" },
       { capabilities: { tools: {} } }
     );
     this.ttsClient = new EdgeTTSClient();
-    
-    this.savePath = this.initializeSavePath();
     
     this.setupHandlers();
     this.server.onerror = (error) => console.error("[MCP Error]", error);
   }
 
-  private initializeSavePath(): string {
-    // 从环境变量 TTS_SAVE_PATH 读取路径
-    const envPath = process.env.TTS_SAVE_PATH;
-    
-    // 如果环境变量不存在，则使用系统临时目录下的一个子目录作为安全默认值
-    const saveDirectory = envPath || path.join(os.tmpdir(), "edge-tts-mcp-output");
-
-    console.error(`[Config] Audio save path configured to: ${saveDirectory}`);
-    
-    // 检查路径是否为绝对路径，如果不是，则抛出错误，强制要求明确的配置
-    if (!path.isAbsolute(saveDirectory)) {
-        console.error(`[Config Error] TTS_SAVE_PATH must be an absolute path. Received: "${saveDirectory}"`);
-        process.exit(1); // 启动失败
-    }
-
-    // 确保目录存在
-    try {
-        fs.mkdirSync(saveDirectory, { recursive: true });
-    } catch (error: any) {
-        console.error(`[Config Error] Failed to create save directory at ${saveDirectory}: ${error.message}`);
-        process.exit(1); // 启动失败
-    }
-    
-    return saveDirectory;
-  }
+  // The 'initializeSavePath' method is no longer needed.
 
   private setupHandlers() {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -189,12 +210,12 @@ class EdgeTTSMcpServer {
         {
           name: "batch_generate_speech",
           description: 
-            "Batch generate speech audio from text. Audio files are saved to a pre-configured local directory on the server.\n" +
+            "Batch generate speech audio from text. Audio files are uploaded to an online service and a public URL is returned.\n" +
             "### USAGE GUIDE:\n" +
             "1. **Input**: An object with a `segments` array.\n" +
             "2. **Example JSON**:\n" +
             "   `{ \"segments\": [ { \"speech_content\": \"Hello world\" } ] }`\n" +
-            "3. **Note**: The save path is configured via the `TTS_SAVE_PATH` environment variable on the server.",
+            "3. **Note**: For authenticated uploads, set the `URUSAI_API_TOKEN` environment variable on the server.",
           inputSchema: {
             type: "object",
             properties: {
@@ -252,17 +273,19 @@ class EdgeTTSMcpServer {
       
       for (const subText of subSegments) {
         try {
+          // Step 1: Generate audio buffer
           const audioBuffer = await this.ttsClient.getAudio(subText, voice, rate, pitch);
           
+          // Step 2: Upload the buffer instead of saving it
           const filename = `tts_${index}_${Date.now()}_${uuidv4().substring(0,4)}.mp3`;
-          const filePath = path.join(this.savePath, filename);
-          fs.writeFileSync(filePath, audioBuffer);
+          const audioUrl = await uploadToUrusai(audioBuffer, filename);
           
-          resultObj.audio_list.push({ text: subText, audio_path: filePath });
+          // Step 3: Push the URL to the result list
+          resultObj.audio_list.push({ text: subText, audio_path: audioUrl });
 
         } catch (e: any) {
           console.error(`[Error] Failed chunk: ${subText.substring(0, 30)}... Reason: ${e.message}`);
-          resultObj.audio_list.push({ text: subText, audio_path: "ERROR_GENERATING_OR_SAVING" });
+          resultObj.audio_list.push({ text: subText, audio_path: "ERROR_GENERATING_OR_UPLOADING" });
         }
       }
       return resultObj;
@@ -279,7 +302,7 @@ class EdgeTTSMcpServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("Edge TTS MCP Server (Env Config Mode) running on stdio");
+    console.error("Edge TTS MCP Server (Online Upload Mode) running on stdio");
   }
 }
 

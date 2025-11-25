@@ -1,107 +1,107 @@
-# Edge TTS MCP Server
+# Edge TTS MCP 服务器
 
-This project provides a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that acts as a tool for Large Language Models (LLMs) like Claude or GPT. It uses Microsoft Edge's free Text-to-Speech service to convert text into high-quality audio files.
+本项目提供一个[模型上下文协议 (MCP)](https://modelcontextprotocol.io/) 服务器，可作为大型语言模型 (LLM)（如 Claude、GPT 等）的工具。它利用微软 Edge 浏览器免费的文本转语音 (TTS) 服务，将文本转换为高质量的音频。
 
-The server saves the generated audio files locally and exposes them via a built-in HTTP server, allowing web-based clients (e.g., chat interfaces) to play the audio directly.
+与旧版本不同，此服务器不会将生成的音频文件保存在本地，而是**自动将其上传至 URUSAI! API**，并返回一个可公开访问的 URL。这使得客户端（例如网页聊天界面）无需额外部署，即可直接在线播放音频。
 
-## Features
+## 功能特性
 
-- **High-Quality TTS**: Leverages Microsoft Edge's powerful and natural-sounding speech synthesis.
-- **Local Hosting**: Saves audio files to a local directory and serves them over HTTP for easy access in web UIs.
-- **Configurable Voices**: Supports a wide range of voices, speeds, and pitches.
-- **Smart Text Splitting**: Automatically splits long texts into smaller chunks to handle API limits gracefully.
-- **Environment-based Configuration**: Securely configured via environment variables, not by LLM input.
-- **Standard MCP Tool**: Integrates seamlessly with LangChain Agents or any MCP-compatible client.
+-   **高质量 TTS**: 借助微软 Edge 强大而自然的语音合成技术。
+-   **在线上传与托管**: 将生成的音频文件自动上传至 URUSAI! 服务，无需本地存储或自行搭建 HTTP 服务器。
+-   **可配置的声音**: 支持多种声音、语速和音调的调整。
+-   **智能文本切分**: 能够自动将长文本分割成较小的片段，以优雅地处理 API 的限制。
+-   **基于环境变量的配置**: 通过环境变量进行安全配置，避免 LLM 直接接触敏感信息。
+-   **标准 MCP 工具**: 可无缝集成到 LangChain Agents 或任何兼容 MCP 的客户端中。
 
-## Prerequisites
+## 先决条件
 
-- [Node.js](https://nodejs.org/) (v18 or later recommended)
-- [npm](https://www.npmjs.com/) or another package manager
+-   [Node.js](https://nodejs.org/) (推荐 v18 或更高版本)
+-   [npm](https://www.npmjs.com/) 或其他包管理器
 
-## Installation
+## 安装
 
-1.  Clone the repository:
+1.  克隆本仓库：
     ```bash
-    git clone <your-repo-url>
-    cd <your-repo-directory>
+    git clone <你的仓库URL>
+    cd <你的仓库目录>
     ```
 
-2.  Install the dependencies:
+2.  安装依赖项：
     ```bash
     npm install
     ```
-    Required packages include `@modelcontextprotocol/sdk`, `express`, and `uuid`.
+    必需的依赖包包括 `@modelcontextprotocol/sdk` 和 `uuid`。
 
-## Configuration
+## 配置
 
-The server is configured using environment variables. You can set them in your shell or create a `.env` file (and use a library like `dotenv`).
+服务器通过环境变量进行配置。您可以在命令行中设置它们，或创建一个 `.env` 文件（并使用 `dotenv` 等库加载）。
 
-| Variable          | Description                                                                 | Default                                 |
-| ----------------- | --------------------------------------------------------------------------- | --------------------------------------- |
-| `TTS_SAVE_PATH`   | **Required**. The absolute path to the directory where audio files will be saved. | System's temporary directory            |
+| 变量 | 描述 | 默认值 |
+| :--- | :--- | :--- |
+| `URUSAI_API_TOKEN` | **可选**。用于上传到 URUSAI! API 的个人凭证 (Token)。如果未提供，将以匿名方式上传。 | 无 (匿名上传) |
 
-### Example Configuration
+### 配置示例
 
 **Windows (PowerShell):**
 ```powershell
-$env:TTS_SAVE_PATH="C:\audio-output"
+$env:URUSAI_API_TOKEN="your_personal_token_here"
 ```
 
 **Linux / macOS:**
 ```bash
-export TTS_SAVE_PATH="/home/user/audio-output"
+export URUSAI_API_TOKEN="your_personal_token_here"
 ```
 
-## Running the Server
+## 运行服务器
 
-Once configured, you can run the server. If you are using TypeScript, you need to compile it to JavaScript first.
+配置完成后，即可运行服务器。如果您正在使用 TypeScript，需要先将其编译为 JavaScript。
 
-1.  **Compile TypeScript (if applicable):**
+1.  **编译 TypeScript (如果需要):**
     ```bash
     npx tsc
     ```
 
-2.  **Run the server:**
+2.  **运行服务器:**
     ```bash
-    node dist/edge-tts-mcp-server.js
+    node dist/index.js
     ```
-    You should see output confirming that the MCP server is running on stdio and the HTTP server is serving files from your configured path.
+    您应该会看到类似 `Edge TTS MCP Server (Online Upload Mode) running on stdio` 的输出，这表明 MCP 服务器已在标准输入/输出上成功运行。
 
-## Tool Usage for LLMs
+## LLM 工具使用说明
 
-The server exposes one tool named `batch_generate_speech`. The LLM should be instructed to provide arguments in the following JSON format:
+服务器暴露了一个名为 `batch_generate_speech` 的工具。LLM 需要按照以下 JSON 格式提供参数：
 
-### Input Schema
+### 输入模式 (Input Schema)
 
 ```json
 {
   "segments": [
     {
-      "speech_content": "The text you want to convert to speech.",
-      "voice_id": "zh-CN-XiaoxiaoMultilingualNeural", // Optional
-      "speech_rate": 25, // Optional, percentage increase (e.g., 25 is 1.25x)
-      "speech_pitch": 0 // Optional, percentage change
+      "speech_content": "你想要转换为语音的文本。",
+      "voice_id": "zh-CN-XiaoxiaoMultilingualNeural", // 可选
+      "speech_rate": 25, // 可选, 语速增加的百分比 (例如 25 代表 1.25 倍速)
+      "speech_pitch": 0 // 可选, 音调变化的百分比
     }
   ]
 }
 ```
 
-### Expected Output
+### 预期输出 (Expected Output)
 
-The tool will process the request and return a JSON string containing URLs for the generated audio files.
+该工具会处理请求，并返回一个包含音频文件公开链接的 JSON 字符串。
 
 ```json
 [
   {
-    "text": "The original text segment.",
+    "text": "原始的文本片段。",
     "audio_list": [
       {
-        "text": "The text chunk that was converted.",
-        "audio_url": "http://localhost:7877/tts_0_1764095555123_abcd.mp3"
+        "text": "被转换的具体文本块。",
+        "audio_path": "https://i.urusai.cc/shine.png"
       }
     ]
   }
 ]
 ```
 
-A web-based client can then parse this JSON and create playable `<audio>` elements using these URLs.
+基于 Web 的客户端可以解析此 JSON，并使用返回的 URL 创建可播放的 `<audio>` 元素。
