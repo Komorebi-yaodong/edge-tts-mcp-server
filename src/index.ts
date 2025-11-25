@@ -7,23 +7,14 @@ import {
   ErrorCode,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { Catbox } from "node-catbox";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "node:crypto";
-import { Readable } from "node:stream";
-import { setGlobalDispatcher, ProxyAgent } from "undici";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 
-// === 0. 代理配置 ===
-const PROXY_URL = process.env.HTTPS_PROXY || "http://127.0.0.1:10808"; 
 
-try {
-  const dispatcher = new ProxyAgent(PROXY_URL);
-  setGlobalDispatcher(dispatcher);
-} catch (error) {
-  console.error(`[System] Failed to set proxy:`, error);
-}
-
-// === 1. 声音列表定义 ===
+// === 1. 声音列表定义 (保持不变) ===
 const VOICE_MAP: Record<string, string> = {
   "zh-CN-XiaochenMultilingualNeural": "晓辰 (女/多语言)",
   "zh-CN-XiaoshuangMultilingualNeural": "晓双 (女/萝莉/多语言)",
@@ -37,69 +28,47 @@ const VOICE_MAP: Record<string, string> = {
   "zh-CN-Yunxiao:DragonHDFlashLatestNeural": "云晓 (男/高清)",
 };
 
-// === 2. 辅助工具函数 ===
-
+// === 2. 辅助工具函数 (保持不变) ===
 function preprocessText(text: string): string {
-  if (!text) return "";
-  let clean = text;
-  clean = clean.replace(/[*_`#>]/g, ""); 
-  clean = clean.replace(/——/g, "，"); 
-  clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"); 
-  return clean.trim();
+    if (!text) return "";
+    let clean = text;
+    clean = clean.replace(/[*_`#>]/g, "");
+    clean = clean.replace(/——/g, "，");
+    clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    return clean.trim();
 }
 
-/**
- * 核心修改：计算“发音单元”数量
- * 规则：汉字数 + 英文单词数
- */
 function getWordCount(text: string): number {
-  if (!text) return 0;
-  
-  // 1. 统计汉字 ([\u4e00-\u9fa5])
-  const cnMatch = text.match(/[\u4e00-\u9fa5]/g);
-  const cnCount = cnMatch ? cnMatch.length : 0;
-
-  // 2. 统计英文/数字单词 (去除汉字后，按非单词字符分割)
-  // 先把汉字替换为空格，避免粘连干扰
-  const textWithoutCn = text.replace(/[\u4e00-\u9fa5]/g, " ");
-  // 匹配连续的字母或数字作为单词
-  const enMatch = textWithoutCn.match(/[a-zA-Z0-9\u00C0-\u00FF]+/g);
-  const enCount = enMatch ? enMatch.length : 0;
-
-  return cnCount + enCount;
+    if (!text) return 0;
+    const cnMatch = text.match(/[\u4e00-\u9fa5]/g);
+    const cnCount = cnMatch ? cnMatch.length : 0;
+    const textWithoutCn = text.replace(/[\u4e00-\u9fa5]/g, " ");
+    const enMatch = textWithoutCn.match(/[a-zA-Z0-9\u00C0-\u00FF]+/g);
+    const enCount = enMatch ? enMatch.length : 0;
+    return cnCount + enCount;
 }
 
-/**
- * 文本切分：基于 Word Count 进行切分
- * 默认阈值：100 (汉字+单词总数)
- */
 function splitText(text: string, maxWordCount: number = 100): string[] {
-  // 如果总词数小于限制，直接返回
-  if (getWordCount(text) <= maxWordCount) return [text];
-
-  // 还是按标点符号粗分
-  const rawSentences = text.split(/([。！？；.!?;]+)/);
-  const mergedSegments: string[] = [];
-  let buffer = "";
-
-  for (let i = 0; i < rawSentences.length; i++) {
-      const part = rawSentences[i];
-      
-      // 核心修改：这里判断 buffer + part 的“词数”是否超标
-      if (getWordCount(buffer + part) < maxWordCount) {
-          buffer += part;
-      } else {
-          if (buffer.trim()) mergedSegments.push(buffer);
-          buffer = part;
-      }
-  }
-  if (buffer.trim()) mergedSegments.push(buffer);
-
-  return mergedSegments.filter(s => s.trim().length > 0);
+    if (getWordCount(text) <= maxWordCount) return [text];
+    const rawSentences = text.split(/([。！？；.!?;]+)/);
+    const mergedSegments: string[] = [];
+    let buffer = "";
+    for (let i = 0; i < rawSentences.length; i++) {
+        const part = rawSentences[i];
+        if (getWordCount(buffer + part) < maxWordCount) {
+            buffer += part;
+        } else {
+            if (buffer.trim()) mergedSegments.push(buffer);
+            buffer = part;
+        }
+    }
+    if (buffer.trim()) mergedSegments.push(buffer);
+    return mergedSegments.filter(s => s.trim().length > 0);
 }
 
 // === 3. Edge TTS Client (保持不变) ===
 class EdgeTTSClient {
+  // ... (内部代码完全不变) ...
   private expiredAt: number | null = null;
   private endpoint: any = null;
   private clientId: string = uuidv4().replace(/-/g, "");
@@ -158,7 +127,6 @@ class EdgeTTSClient {
 }
 
 // === 4. MCP Server 实现 ===
-
 interface SpeechSegmentInput {
   speech_content: string; 
   voice_id?: string;      
@@ -168,23 +136,51 @@ interface SpeechSegmentInput {
 
 interface SegmentResult {
   text: string; 
-  audio_list: { text: string; audio_url: string }[]; 
+  audio_list: { text: string; audio_path: string }[]; 
 }
 
 class EdgeTTSMcpServer {
   private server: Server;
   private ttsClient: EdgeTTSClient;
-  private catbox: Catbox;
+  private readonly savePath: string;
 
   constructor() {
     this.server = new Server(
-      { name: "edge-tts-server", version: "2.2.0" },
+      { name: "edge-tts-server", version: "4.0.0-env-config" },
       { capabilities: { tools: {} } }
     );
     this.ttsClient = new EdgeTTSClient();
-    this.catbox = new Catbox();
+    
+    this.savePath = this.initializeSavePath();
+    
     this.setupHandlers();
     this.server.onerror = (error) => console.error("[MCP Error]", error);
+  }
+
+  private initializeSavePath(): string {
+    // 从环境变量 TTS_SAVE_PATH 读取路径
+    const envPath = process.env.TTS_SAVE_PATH;
+    
+    // 如果环境变量不存在，则使用系统临时目录下的一个子目录作为安全默认值
+    const saveDirectory = envPath || path.join(os.tmpdir(), "edge-tts-mcp-output");
+
+    console.error(`[Config] Audio save path configured to: ${saveDirectory}`);
+    
+    // 检查路径是否为绝对路径，如果不是，则抛出错误，强制要求明确的配置
+    if (!path.isAbsolute(saveDirectory)) {
+        console.error(`[Config Error] TTS_SAVE_PATH must be an absolute path. Received: "${saveDirectory}"`);
+        process.exit(1); // 启动失败
+    }
+
+    // 确保目录存在
+    try {
+        fs.mkdirSync(saveDirectory, { recursive: true });
+    } catch (error: any) {
+        console.error(`[Config Error] Failed to create save directory at ${saveDirectory}: ${error.message}`);
+        process.exit(1); // 启动失败
+    }
+    
+    return saveDirectory;
   }
 
   private setupHandlers() {
@@ -193,13 +189,12 @@ class EdgeTTSMcpServer {
         {
           name: "batch_generate_speech",
           description: 
-            "Batch generate speech audio from a list of text segments.\n" +
+            "Batch generate speech audio from text. Audio files are saved to a pre-configured local directory on the server.\n" +
             "### USAGE GUIDE:\n" +
-            "1. **Structure**: Input MUST be an object with a `segments` array.\n" +
+            "1. **Input**: An object with a `segments` array.\n" +
             "2. **Example JSON**:\n" +
-            "   `{ \"segments\": [ { \"speech_content\": \"Hello world\" }, { \"speech_content\": \"你好世界\" } ] }`\n" +
-            "3. **Limits**: Total content should be under 1000 words/Hanzi characters.\n" +
-            "4. **Defaults**: `voice_id` defaults to Xiaoxiao, `speech_rate` defaults to 25 (1.25x speed).\n",
+            "   `{ \"segments\": [ { \"speech_content\": \"Hello world\" } ] }`\n" +
+            "3. **Note**: The save path is configured via the `TTS_SAVE_PATH` environment variable on the server.",
           inputSchema: {
             type: "object",
             properties: {
@@ -209,23 +204,10 @@ class EdgeTTSMcpServer {
                 items: {
                   type: "object",
                   properties: {
-                    speech_content: { 
-                      type: "string", 
-                      description: "The actual content/text to be spoken." 
-                    },
-                    voice_id: { 
-                      type: "string", 
-                      description: "Optional. Voice ID. Defaults to 'zh-CN-XiaoxiaoMultilingualNeural'.",
-                      enum: Object.keys(VOICE_MAP)
-                    },
-                    speech_rate: { 
-                      type: "number", 
-                      description: "Optional. Speed percentage. Defaults to 25 (1.25x). Use 0 for normal, 50 for fast." 
-                    },
-                    speech_pitch: { 
-                      type: "number", 
-                      description: "Optional. Pitch percentage. Defaults to 0." 
-                    }
+                    speech_content: { type: "string", description: "The text to be spoken." },
+                    voice_id: { type: "string", description: "Optional Voice ID.", enum: Object.keys(VOICE_MAP) },
+                    speech_rate: { type: "number", description: "Optional speech rate percentage." },
+                    speech_pitch: { type: "number", description: "Optional speech pitch percentage." }
                   },
                   required: ["speech_content"]
                 }
@@ -249,57 +231,38 @@ class EdgeTTSMcpServer {
     if (!args || !Array.isArray(args.segments)) {
       throw new McpError(ErrorCode.InvalidParams, "Invalid input: 'segments' array is required.");
     }
-
+    
     const segments = args.segments as SpeechSegmentInput[];
-    
-    // 核心修改：使用 getWordCount 计算总工作量
     const totalCount = segments.reduce((acc, cur) => acc + getWordCount(cur.speech_content || ""), 0);
-    
     if (totalCount > 1000) { 
-        throw new McpError(ErrorCode.InvalidParams, `Total content count (${totalCount} words/Hanzi) exceeds limit (1000). Please reduce content.`);
+        throw new McpError(ErrorCode.InvalidParams, `Total content count (${totalCount} words/Hanzi) exceeds limit (1000).`);
     }
 
     console.error(`[Batch] Processing ${segments.length} segments, total word count: ${totalCount}`);
 
     const segmentPromises = segments.map(async (segInput, index) => {
       const rawText = segInput.speech_content;
-      
       const voice = segInput.voice_id ?? "zh-CN-XiaoxiaoMultilingualNeural";
       const rate = segInput.speech_rate ?? 25; 
       const pitch = segInput.speech_pitch ?? 0;
-
       const cleanText = preprocessText(rawText);
-
-      const resultObj: SegmentResult = {
-        text: rawText, 
-        audio_list: []
-      };
-
+      const resultObj: SegmentResult = { text: rawText, audio_list: [] };
       if (!cleanText) return resultObj;
-
-      // 核心修改：按 100 词/汉字切分
       const subSegments = splitText(cleanText, 100);
       
       for (const subText of subSegments) {
         try {
           const audioBuffer = await this.ttsClient.getAudio(subText, voice, rate, pitch);
           
-          const stream = Readable.from(audioBuffer);
-          const url = await this.catbox.uploadFileStream({
-            stream: stream,
-            filename: `tts_${index}_${Date.now()}_${uuidv4().substring(0,4)}.mp3`
-          });
+          const filename = `tts_${index}_${Date.now()}_${uuidv4().substring(0,4)}.mp3`;
+          const filePath = path.join(this.savePath, filename);
+          fs.writeFileSync(filePath, audioBuffer);
           
-          resultObj.audio_list.push({
-            text: subText,
-            audio_url: url
-          });
+          resultObj.audio_list.push({ text: subText, audio_path: filePath });
+
         } catch (e: any) {
-          console.error(`[Error] Failed chunk: ${e.message}`);
-          resultObj.audio_list.push({
-            text: subText,
-            audio_url: "ERROR_GENERATING"
-          });
+          console.error(`[Error] Failed chunk: ${subText.substring(0, 30)}... Reason: ${e.message}`);
+          resultObj.audio_list.push({ text: subText, audio_path: "ERROR_GENERATING_OR_SAVING" });
         }
       }
       return resultObj;
@@ -307,26 +270,16 @@ class EdgeTTSMcpServer {
 
     try {
       const finishedSegments = await Promise.all(segmentPromises);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(finishedSegments, null, 2)
-          }
-        ],
-      };
+      return { content: [{ type: "text", text: JSON.stringify(finishedSegments, null, 2) }] };
     } catch (e: any) {
-      return {
-        content: [{ type: "text", text: `Batch process error: ${e.message}` }],
-        isError: true,
-      };
+      return { content: [{ type: "text", text: `Batch process error: ${e.message}` }], isError: true };
     }
   }
 
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("Edge TTS MCP Server (WordCount Mode) running on stdio");
+    console.error("Edge TTS MCP Server (Env Config Mode) running on stdio");
   }
 }
 
