@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",                                  /* 编译目标为较新的 JS 版本 */
+    "module": "NodeNext",                                /* 使用 Node.js 的 ESM 模块系统 */
+    "moduleResolution": "NodeNext",                      /* 模块解析策略 */
+    "esModuleInterop": true,                             /* 允许 default import */
+    "forceConsistentCasingInFileNames": true,            /* 强制文件名大小写一致 */
+    "strict": true,                                      /* 启用严格模式 */
+    "skipLibCheck": true,                                /* 跳过库文件的类型检查 */
+    "outDir": "./dist",                                  /* 输出目录 */
+    "rootDir": "./src",                                      /* 源码根目录 */
+    "types": ["node"]                                    /* 显式包含 Node.js 类型 */
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}
