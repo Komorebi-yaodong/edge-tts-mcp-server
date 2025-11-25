@@ -39,20 +39,17 @@ The server is configured using environment variables. You can set them in your s
 | Variable          | Description                                                                 | Default                                 |
 | ----------------- | --------------------------------------------------------------------------- | --------------------------------------- |
 | `TTS_SAVE_PATH`   | **Required**. The absolute path to the directory where audio files will be saved. | System's temporary directory            |
-| `TTS_HTTP_PORT`   | The local port for the HTTP server that serves the audio files.             | `7877`                                  |
 
 ### Example Configuration
 
 **Windows (PowerShell):**
 ```powershell
-$env:TTS_SAVE_PATH="D:\audio-output"
-$env:TTS_HTTP_PORT="8000"
+$env:TTS_SAVE_PATH="C:\audio-output"
 ```
 
 **Linux / macOS:**
 ```bash
 export TTS_SAVE_PATH="/home/user/audio-output"
-export TTS_HTTP_PORT="8000"
 ```
 
 ## Running the Server
