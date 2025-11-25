@@ -8,6 +8,9 @@
     "start": "node dist/index.js",
     "dev": "tsx index.ts"
   },
+  "bin": {
+    "edge-tts-mcp-server": "./dist/index.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
