@@ -9,32 +9,19 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "node:crypto";
-// node:fs, node:path, and node:os are no longer needed.
 
-// === 新增：上传模块 ===
+// === 上传模块 (保持不变) ===
 const URUSAI_API_URL = "https://api.urusai.cc/v1/upload";
 
-/**
- * 将音频 Buffer 上传到 URUSAI! API.
- * @param audioBuffer - 要上传的 MP3 音频 Buffer.
- * @param filename - 在表单中指定的文件名.
- * @returns 返回上传成功后的直接链接 (url_direct).
- * @throws 如果上传失败或 API 返回错误，则抛出异常.
- */
 async function uploadToUrusai(audioBuffer: Buffer, filename: string): Promise<string> {
   const formData = new FormData();
-  
-  // URUSAI! API 要求 'file' 字段必须是 Blob 或 File 对象
   const audioBlob = new Blob([new Uint8Array(audioBuffer)], { type: "audio/mpeg" });
   formData.append("file", audioBlob, filename);
 
-  // 检查环境变量中是否有 token
   const apiToken = process.env.URUSAI_API_TOKEN;
   if (apiToken) {
     formData.append("token", apiToken);
   }
-
-  // R18 默认为 0
   formData.append("r18", "0");
 
   try {
@@ -42,13 +29,10 @@ async function uploadToUrusai(audioBuffer: Buffer, filename: string): Promise<st
       method: "POST",
       body: formData,
     });
-
     if (!response.ok) {
       throw new Error(`API request failed with status ${response.status}: ${await response.text()}`);
     }
-
     const result = await response.json();
-
     if (result.status === "success" && result.data && result.data.url_direct) {
       return result.data.url_direct;
     } else {
@@ -56,32 +40,75 @@ async function uploadToUrusai(audioBuffer: Buffer, filename: string): Promise<st
     }
   } catch (error: any) {
     console.error(`[Upload Error] Failed to upload to URUSAI!: ${error.message}`);
-    throw error; // Re-throw the error to be caught by the handler
+    throw error;
   }
 }
 
+// === 音频合并模块 (保持不变) ===
+function stripId3v2(buffer: Buffer): Buffer {
+    if (buffer.length > 10 && buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) {
+        const sizeBytes = buffer.slice(6, 10);
+        const tagSize = (sizeBytes[0] << 21) | (sizeBytes[1] << 14) | (sizeBytes[2] << 7) | sizeBytes[3];
+        const headerSize = 10;
+        return buffer.slice(headerSize + tagSize);
+    }
+    return buffer;
+}
 
-// === 1. 声音列表定义 (保持不变) ===
+function mergeMp3Buffers(buffers: Buffer[]): Buffer {
+    if (buffers.length === 0) return Buffer.alloc(0);
+    if (buffers.length === 1) return buffers[0];
+
+    const firstBuffer = buffers[0];
+    const otherBuffers = buffers.slice(1);
+    const audioFrames = otherBuffers.map(buffer => stripId3v2(buffer));
+    return Buffer.concat([firstBuffer, ...audioFrames]);
+}
+
+
 const VOICE_MAP: Record<string, string> = {
-  "zh-CN-XiaochenMultilingualNeural": "晓辰 (女/多语言)",
-  "zh-CN-XiaoshuangMultilingualNeural": "晓双 (女/萝莉/多语言)",
-  "zh-CN-XiaoxiaoMultilingualNeural": "晓晓 (女/多语言 - 默认)",
-  "zh-CN-XiaoyouMultilingualNeural": "晓悠 (女/萝莉/多语言)",
-  "zh-CN-XiaoyuMultilingualNeural": "晓宇 (女/多语言)",
-  "zh-CN-YunfanMultilingualNeural": "云帆 (男/多语言)",
-  "zh-CN-YunxiaoMultilingualNeural": "云晓 (男/多语言)",
-  "zh-CN-YunyiMultilingualNeural": "云逸 (男/多语言)",
-  "zh-CN-Xiaoxiao:DragonHDFlashLatestNeural": "晓晓 (女/高清)",
-  "zh-CN-Yunxiao:DragonHDFlashLatestNeural": "云晓 (男/高清)",
+    // --- 推荐女声 (默认/高清/多语言/特色) ---
+    "zh-CN-XiaoxiaoMultilingualNeural": "晓晓 (女/多语言 - 默认)",
+    "zh-CN-Xiaoxiao:DragonHDFlashLatestNeural": "晓晓 (女/高清)",
+    "zh-CN-XiaoshuangMultilingualNeural": "晓双 (女/萝莉/多语言)",
+    "zh-CN-XiaoyouMultilingualNeural": "晓悠 (女/萝莉/多语言)",
+    "zh-CN-XiaochenMultilingualNeural": "晓辰 (女/知性/多语言)",
+    "zh-CN-XiaoyuMultilingualNeural": "晓宇 (女/多语言)",
+    "zh-CN-XiaoyiNeural": "晓伊 (女/甜美)",
+    "zh-CN-XiaomengNeural": "晓梦 (女/梦幻)",
+
+    // --- 推荐男声 (默认/高清/多语言/特色) ---
+    "zh-CN-YunyiMultilingualNeural": "云逸 (男/多语言 - 默认)",
+    "zh-CN-YunxiaoMultilingualNeural": "云晓 (男/多语言)",
+    "zh-CN-YunfanMultilingualNeural": "云帆 (男/多语言)",
+    "zh-CN-Yunxiao:DragonHDFlashLatestNeural": "云晓 (男/高清)",
+    "zh-CN-YunxiNeural": "云希 (男/清朗)",
+    "zh-CN-YunfengNeural": "云枫 (男/磁性)",
+    "zh-CN-YunjianNeural": "云健 (男/稳重)",
+    "zh-CN-YunzeNeural": "云泽 (男/深沉)",
+    "zh-CN-YunyeNeural": "云野 (男/野性)",
+
+    // --- 更多女声 ---
+    "zh-CN-XiaoxiaoNeural": "晓晓 (女/温柔)",
+    "zh-CN-XiaohanNeural": "晓涵 (女/优雅)",
+    "zh-CN-XiaomoNeural": "晓墨 (女/文艺)",
+    "zh-CN-XiaoqiuNeural": "晓秋 (女/成熟)",
+    "zh-CN-XiaoruiNeural": "晓睿 (女/智慧)",
+    "zh-CN-XiaoxuanNeural": "晓萱 (女/清新)",
+    "zh-CN-XiaoyanNeural": "晓颜 (女/柔美)",
+    "zh-CN-XiaozhenNeural": "晓甄 (女/端庄)",
+
+    // --- 更多男声 ---
+    "zh-CN-YunyangNeural": "云扬 (男/阳光)",
+    "zh-CN-YunhaoNeural": "云皓 (男/豪迈)",
+    "zh-CN-YunxiaNeural": "云夏 (男/热情)",
 };
 
-// === 2. 辅助工具函数 (保持不变) ===
+
+// === 辅助工具函数 (保持不变) ===
 function preprocessText(text: string): string {
     if (!text) return "";
-    let clean = text;
-    clean = clean.replace(/[*_`#>]/g, "");
-    clean = clean.replace(/——/g, "，");
-    clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    let clean = text.replace(/[*_`#>]/g, "").replace(/——/g, "，").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
     return clean.trim();
 }
 
@@ -113,7 +140,7 @@ function splitText(text: string, maxWordCount: number = 100): string[] {
     return mergedSegments.filter(s => s.trim().length > 0);
 }
 
-// === 3. Edge TTS Client (保持不变) ===
+// === Edge TTS Client (保持不变) ===
 class EdgeTTSClient {
   private expiredAt: number | null = null;
   private endpoint: any = null;
@@ -143,15 +170,15 @@ class EdgeTTSClient {
     const endpointUrl = "https://dev.microsofttranslator.com/apps/endpoint?api-version=1.0";
     const signature = await this.sign(endpointUrl);
     const headers = {
-      "Accept-Language": "zh-Hans", "X-ClientVersion": "4.0.530a 5fe1dc6c", "X-UserId": "0f04d16a175c411e",
+      "Accept-Language": "zh-Hans", "X-ClientVersion": "4.0.53a 5fe1dc6c", "X-UserId": "0f04d16a175c411e",
       "X-HomeGeographicRegion": "zh-Hans-CN", "X-ClientTraceId": this.clientId, "X-MT-Signature": signature,
       "User-Agent": "okhttp/4.5.0", "Content-Type": "application/json; charset=utf-8"
     };
     const res = await fetch(endpointUrl, { method: "POST", headers });
     return await res.json();
   }
-
-  public async getAudio(text: string, voiceName: string, rate: number, pitch: number): Promise<Buffer> {
+  
+  public async getAudio(text: string, voiceName: string, rate: number, pitch: number, pauseAfterMs?: number): Promise<Buffer> {
     if (!this.expiredAt || Date.now() / 1000 > this.expiredAt - 60) {
       this.endpoint = await this.getEndpoint();
       const jwt = this.endpoint.t.split(".")[1];
@@ -164,7 +191,12 @@ class EdgeTTSClient {
       "Authorization": this.endpoint.t, "Content-Type": "application/ssml+xml",
       "User-Agent": "okhttp/4.5.0", "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3"
     };
-    const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}"><mstts:express-as style="general" styledegree="1.0" role="default"><prosody rate="${rate}%" pitch="${pitch}%" volume="50">${text}</prosody></mstts:express-as></voice></speak>`;
+
+    const breakTag = (pauseAfterMs && pauseAfterMs > 0)
+      ? `<break time="${pauseAfterMs}ms"/>`
+      : '';
+      
+    const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}"><mstts:express-as style="general" styledegree="1.0" role="default"><prosody rate="${rate}%" pitch="${pitch}%" volume="50">${text}</prosody></mstts:express-as>${breakTag}</voice></speak>`;
     
     const response = await fetch(url, { method: "POST", headers: headers as any, body: ssml });
     if (!response.ok) throw new Error(`TTS API Error ${response.status}: ${await response.text()}`);
@@ -172,37 +204,35 @@ class EdgeTTSClient {
   }
 }
 
-// === 4. MCP Server 实现 ===
+// === MCP Server 实现 (保持不变) ===
 interface SpeechSegmentInput {
   speech_content: string; 
   voice_id?: string;      
   speech_rate?: number;   
   speech_pitch?: number;  
+  merge_audio?: boolean;
+  pause_after_ms?: number;
 }
 
 interface SegmentResult {
-  text: string; 
-  // 'audio_path' now holds the public URL of the uploaded audio.
-  audio_list: { text: string; audio_path: string }[]; 
+  text: string;
+  audio_list: { text: string; audio_path: string }[];
+  merged_audio_path?: string;
 }
 
 class EdgeTTSMcpServer {
   private server: Server;
   private ttsClient: EdgeTTSClient;
-  // The 'savePath' property is no longer needed.
 
   constructor() {
     this.server = new Server(
-      { name: "edge-tts-server", version: "4.0.0-online-upload" },
+      { name: "edge-tts-server", version: "4.3.0-expanded-voices" },
       { capabilities: { tools: {} } }
     );
     this.ttsClient = new EdgeTTSClient();
-    
     this.setupHandlers();
     this.server.onerror = (error) => console.error("[MCP Error]", error);
   }
-
-  // The 'initializeSavePath' method is no longer needed.
 
   private setupHandlers() {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -210,12 +240,13 @@ class EdgeTTSMcpServer {
         {
           name: "batch_generate_speech",
           description: 
-            "Batch generate speech audio from text. Audio files are uploaded to an online service and a public URL is returned.\n" +
+            "Generates speech from text, with optional pauses, and returns public audio URLs. Supports merging multiple segments into one file.\n" +
             "### USAGE GUIDE:\n" +
             "1. **Input**: An object with a `segments` array.\n" +
-            "2. **Example JSON**:\n" +
-            "   `{ \"segments\": [ { \"speech_content\": \"Hello world\" } ] }`\n" +
-            "3. **Note**: For authenticated uploads, set the `URUSAI_API_TOKEN` environment variable on the server.",
+            "2. **Pauses**: Add `pause_after_ms` (0-5000) to any segment to add silence after it.\n" +
+            "3. **Merging**: Set `merge_audio: true` on the *first* segment to merge all audio into one file.\n" +
+            "4. **Example (Merged with Pauses)**: `{ \"segments\": [ { \"speech_content\": \"First part.\", \"merge_audio\": true, \"pause_after_ms\": 800 }, { \"speech_content\": \"Second part.\" } ] }`\n" +
+            "5. **Note**: For authenticated uploads, set `URUSAI_API_TOKEN` env var.",
           inputSchema: {
             type: "object",
             properties: {
@@ -228,7 +259,9 @@ class EdgeTTSMcpServer {
                     speech_content: { type: "string", description: "The text to be spoken." },
                     voice_id: { type: "string", description: "Optional Voice ID.", enum: Object.keys(VOICE_MAP) },
                     speech_rate: { type: "number", description: "Optional speech rate percentage." },
-                    speech_pitch: { type: "number", description: "Optional speech pitch percentage." }
+                    speech_pitch: { type: "number", description: "Optional speech pitch percentage." },
+                    merge_audio: { type: "boolean", description: "Set to true on the first segment to merge all audio into one file. Default: false."},
+                    pause_after_ms: { type: "number", description: "Milliseconds of silence to add after this segment (0-5000).", minimum: 0, maximum: 5000 }
                   },
                   required: ["speech_content"]
                 }
@@ -249,8 +282,8 @@ class EdgeTTSMcpServer {
   }
 
   private async handleBatchGenerate(args: any) {
-    if (!args || !Array.isArray(args.segments)) {
-      throw new McpError(ErrorCode.InvalidParams, "Invalid input: 'segments' array is required.");
+    if (!args || !Array.isArray(args.segments) || args.segments.length === 0) {
+      throw new McpError(ErrorCode.InvalidParams, "Invalid input: 'segments' array is required and cannot be empty.");
     }
     
     const segments = args.segments as SpeechSegmentInput[];
@@ -259,50 +292,97 @@ class EdgeTTSMcpServer {
         throw new McpError(ErrorCode.InvalidParams, `Total content count (${totalCount} words/Hanzi) exceeds limit (1000).`);
     }
 
-    console.error(`[Batch] Processing ${segments.length} segments, total word count: ${totalCount}`);
+    const shouldMerge = segments[0].merge_audio === true;
+    console.error(`[Batch] Processing ${segments.length} segments. Merge mode: ${shouldMerge}`);
 
+    if (shouldMerge) {
+        return this.handleMergedGeneration(segments);
+    } else {
+        return this.handleSeparateGeneration(segments);
+    }
+  }
+
+  private async handleSeparateGeneration(segments: SpeechSegmentInput[]) {
     const segmentPromises = segments.map(async (segInput, index) => {
       const rawText = segInput.speech_content;
-      const voice = segInput.voice_id ?? "zh-CN-XiaoxiaoMultilingualNeural";
+      const voice = segInput.voice_id ?? "zh-CN-XiaoxiaoNeural"; // Default to a common voice
       const rate = segInput.speech_rate ?? 25; 
       const pitch = segInput.speech_pitch ?? 0;
+      const pause = segInput.pause_after_ms; 
       const cleanText = preprocessText(rawText);
-      const resultObj: SegmentResult = { text: rawText, audio_list: [] };
+      const resultObj: Omit<SegmentResult, 'merged_audio_path'> = { text: rawText, audio_list: [] };
       if (!cleanText) return resultObj;
       const subSegments = splitText(cleanText, 100);
       
       for (const subText of subSegments) {
         try {
-          // Step 1: Generate audio buffer
-          const audioBuffer = await this.ttsClient.getAudio(subText, voice, rate, pitch);
-          
-          // Step 2: Upload the buffer instead of saving it
-          const filename = `tts_${index}_${Date.now()}_${uuidv4().substring(0,4)}.mp3`;
+          const audioBuffer = await this.ttsClient.getAudio(subText, voice, rate, pitch, pause);
+          const filename = `tts_separate_${index}_${Date.now()}.mp3`;
           const audioUrl = await uploadToUrusai(audioBuffer, filename);
-          
-          // Step 3: Push the URL to the result list
           resultObj.audio_list.push({ text: subText, audio_path: audioUrl });
-
         } catch (e: any) {
-          console.error(`[Error] Failed chunk: ${subText.substring(0, 30)}... Reason: ${e.message}`);
           resultObj.audio_list.push({ text: subText, audio_path: "ERROR_GENERATING_OR_UPLOADING" });
         }
       }
       return resultObj;
     });
+    const finishedSegments = await Promise.all(segmentPromises);
+    return { content: [{ type: "text", text: JSON.stringify(finishedSegments, null, 2) }] };
+  }
+  
+  private async handleMergedGeneration(segments: SpeechSegmentInput[]) {
+      const allSubSegments: { text: string, voice: string, rate: number, pitch: number, pause: number | undefined }[] = [];
+      const originalTexts = segments.map(s => s.speech_content);
 
-    try {
-      const finishedSegments = await Promise.all(segmentPromises);
-      return { content: [{ type: "text", text: JSON.stringify(finishedSegments, null, 2) }] };
-    } catch (e: any) {
-      return { content: [{ type: "text", text: `Batch process error: ${e.message}` }], isError: true };
-    }
+      for (const segInput of segments) {
+          const cleanText = preprocessText(segInput.speech_content);
+          if (cleanText) {
+              const subSegs = splitText(cleanText, 100);
+              subSegs.forEach((subText, index) => {
+                  const isLastSubSegment = index === subSegs.length - 1;
+                  allSubSegments.push({
+                      text: subText,
+                      voice: segInput.voice_id ?? "zh-CN-XiaoxiaoNeural",
+                      rate: segInput.speech_rate ?? 25,
+                      pitch: segInput.speech_pitch ?? 0,
+                      pause: isLastSubSegment ? segInput.pause_after_ms : undefined,
+                  });
+              });
+          }
+      }
+
+      if (allSubSegments.length === 0) {
+        return { content: [{ type: "text", text: JSON.stringify({ text: originalTexts.join('\n'), merged_audio_path: 'NO_CONTENT_TO_GENERATE' }, null, 2) }] };
+      }
+
+      try {
+        const audioBufferPromises = allSubSegments.map(sub => 
+            this.ttsClient.getAudio(sub.text, sub.voice, sub.rate, sub.pitch, sub.pause)
+        );
+        const audioBuffers = await Promise.all(audioBufferPromises);
+
+        const mergedBuffer = mergeMp3Buffers(audioBuffers);
+        
+        const filename = `tts_merged_${Date.now()}.mp3`;
+        const mergedUrl = await uploadToUrusai(mergedBuffer, filename);
+
+        const finalResult: SegmentResult = {
+            text: originalTexts.join('\n'),
+            audio_list: [],
+            merged_audio_path: mergedUrl
+        };
+        
+        return { content: [{ type: "text", text: JSON.stringify(finalResult, null, 2) }] };
+      } catch (e: any) {
+          console.error(`[Merge Error] Failed during merged generation: ${e.message}`);
+          return { content: [{ type: "text", text: `Batch merge process error: ${e.message}` }], isError: true };
+      }
   }
 
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("Edge TTS MCP Server (Online Upload Mode) running on stdio");
+    console.error("Edge TTS MCP Server (with Expanded Voices) running on stdio");
   }
 }
 
