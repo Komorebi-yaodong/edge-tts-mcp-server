@@ -132,7 +132,7 @@ function getWordCount(text: string): number {
     return cnCount + enCount;
 }
 
-function splitText(text: string, maxWordCount: number = 100): string[] {
+function splitText(text: string, maxWordCount: number = 500): string[] {
     if (getWordCount(text) <= maxWordCount) return [text];
     const rawSentences = text.split(/([。！？；.!?;]+)/);
     const mergedSegments: string[] = [];
@@ -333,7 +333,7 @@ class EdgeTTSMcpServer {
     
     const segments = args.segments as SpeechSegmentInput[];
     const totalCount = segments.reduce((acc, cur) => acc + getWordCount(cur.speech_content || ""), 0);
-    if (totalCount > 1000) { 
+    if (totalCount > 5000) { 
         throw new McpError(ErrorCode.InvalidParams, `Total content count (${totalCount}) exceeds limit.`);
     }
 
