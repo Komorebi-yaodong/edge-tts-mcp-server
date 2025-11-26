@@ -66,6 +66,7 @@ function mergeMp3Buffers(buffers: Buffer[]): Buffer {
 }
 
 
+// === 声音列表定义 ===
 const VOICE_MAP: Record<string, string> = {
     // --- 推荐女声 (默认/高清/多语言/特色) ---
     "zh-CN-XiaoxiaoMultilingualNeural": "晓晓 (女/多语言 - 默认)",
@@ -105,10 +106,20 @@ const VOICE_MAP: Record<string, string> = {
 };
 
 
-// === 辅助工具函数 (保持不变) ===
+// === 辅助工具函数 (已增强) ===
 function preprocessText(text: string): string {
     if (!text) return "";
-    let clean = text.replace(/[*_`#>]/g, "").replace(/——/g, "，").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    let clean = text;
+
+    // 1. 修复 SSML 属性的单引号为双引号 (修复 400 错误的核心)
+    // 例如: <break time='500ms'/> -> <break time="500ms"/>
+    clean = clean.replace(/='([^']*)'/g, '="$1"');
+
+    // 2. 清理 Markdown 和其他杂项
+    clean = clean.replace(/[*_`#>]/g, "");
+    clean = clean.replace(/——/g, "，");
+    clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    
     return clean.trim();
 }
 
@@ -124,6 +135,11 @@ function getWordCount(text: string): number {
 
 function splitText(text: string, maxWordCount: number = 100): string[] {
     if (getWordCount(text) <= maxWordCount) return [text];
+    
+    // 注意：如果有 SSML 标签，简单的 split 可能会切断标签。
+    // 但为了保持简单，我们假设 SSML 标签通常紧跟句子。
+    // 如果文本极长且包含复杂 SSML，这里可能需要更复杂的解析，
+    // 但对于一般的播客脚本，按标点分割通常是安全的。
     const rawSentences = text.split(/([。！？；.!?;]+)/);
     const mergedSegments: string[] = [];
     let buffer = "";
@@ -140,7 +156,7 @@ function splitText(text: string, maxWordCount: number = 100): string[] {
     return mergedSegments.filter(s => s.trim().length > 0);
 }
 
-// === Edge TTS Client (保持不变) ===
+// === Edge TTS Client (保持之前的修复) ===
 class EdgeTTSClient {
   private expiredAt: number | null = null;
   private endpoint: any = null;
@@ -196,15 +212,21 @@ class EdgeTTSClient {
       ? `<break time="${pauseAfterMs}ms"/>`
       : '';
       
-    const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}"><mstts:express-as style="general" styledegree="1.0" role="default"><prosody rate="${rate}%" pitch="${pitch}%" volume="50">${text}</prosody></mstts:express-as>${breakTag}</voice></speak>`;
+    // 移除了 express-as 标签以避免 400 错误
+    const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}"><prosody rate="${rate}%" pitch="${pitch}%" volume="50">${text}</prosody>${breakTag}</voice></speak>`;
     
     const response = await fetch(url, { method: "POST", headers: headers as any, body: ssml });
-    if (!response.ok) throw new Error(`TTS API Error ${response.status}: ${await response.text()}`);
+    if (!response.ok) {
+        const errorText = await response.text();
+        // 打印出详细的错误信息和生成的 SSML，方便排查
+        console.error(`[TTS API Error] Status: ${response.status}, Details: ${errorText}, SSML: ${ssml}`);
+        throw new Error(`TTS API Error ${response.status}: ${errorText}`);
+    }
     return Buffer.from(await response.arrayBuffer());
   }
 }
 
-// === MCP Server 实现 (保持不变) ===
+// === MCP Server 实现 (工具描述已更新) ===
 interface SpeechSegmentInput {
   speech_content: string; 
   voice_id?: string;      
@@ -226,7 +248,7 @@ class EdgeTTSMcpServer {
 
   constructor() {
     this.server = new Server(
-      { name: "edge-tts-server", version: "4.3.0-expanded-voices" },
+      { name: "edge-tts-server", version: "4.6.0-robust-ssml" },
       { capabilities: { tools: {} } }
     );
     this.ttsClient = new EdgeTTSClient();
@@ -240,13 +262,16 @@ class EdgeTTSMcpServer {
         {
           name: "batch_generate_speech",
           description: 
-            "Generates speech from text, with optional pauses, and returns public audio URLs. Supports merging multiple segments into one file.\n" +
+            "Generates speech from text, returns public audio URLs. Supports merging multiple segments into one file.\n" +
+            "### SSML INSTRUCTIONS (READ CAREFULLY):\n" +
+            "1. **Supported Tags**: You MAY use `<break time=\"500ms\"/>` for pauses and `<prosody rate=\"...\" pitch=\"...\">` for intonation in `speech_content`.\n" +
+            "2. **STRICT SYNTAX**: You **MUST use DOUBLE QUOTES (\")** for all attributes. Example: `<break time=\"500ms\"/>` is VALID. `<break time='500ms'/>` is INVALID and will fail.\n" +
+            "3. **Forbidden Tags**: Do NOT use `<mstts:express-as>` as it causes errors with multilingual voices.\n" +
             "### USAGE GUIDE:\n" +
             "1. **Input**: An object with a `segments` array.\n" +
-            "2. **Pauses**: Add `pause_after_ms` (0-5000) to any segment to add silence after it.\n" +
-            "3. **Merging**: Set `merge_audio: true` on the *first* segment to merge all audio into one file.\n" +
-            "4. **Example (Merged with Pauses)**: `{ \"segments\": [ { \"speech_content\": \"First part.\", \"merge_audio\": true, \"pause_after_ms\": 800 }, { \"speech_content\": \"Second part.\" } ] }`\n" +
-            "5. **Note**: For authenticated uploads, set `URUSAI_API_TOKEN` env var.",
+            "2. **Merging**: Set `merge_audio: true` on the *first* segment to merge all audio into one file.\n" +
+            "3. **Pauses**: Use `pause_after_ms` prop OR embedded SSML `<break>` tags.\n" +
+            "4. **Example**: `{ \"segments\": [ { \"speech_content\": \"Hello.<break time=\\\"500ms\\\"/>\", \"merge_audio\": true } ] }`",
           inputSchema: {
             type: "object",
             properties: {
@@ -256,7 +281,7 @@ class EdgeTTSMcpServer {
                 items: {
                   type: "object",
                   properties: {
-                    speech_content: { type: "string", description: "The text to be spoken." },
+                    speech_content: { type: "string", description: "The text to be spoken. Supports SSML <break> and <prosody> tags with DOUBLE QUOTES." },
                     voice_id: { type: "string", description: "Optional Voice ID.", enum: Object.keys(VOICE_MAP) },
                     speech_rate: { type: "number", description: "Optional speech rate percentage." },
                     speech_pitch: { type: "number", description: "Optional speech pitch percentage." },
@@ -305,7 +330,7 @@ class EdgeTTSMcpServer {
   private async handleSeparateGeneration(segments: SpeechSegmentInput[]) {
     const segmentPromises = segments.map(async (segInput, index) => {
       const rawText = segInput.speech_content;
-      const voice = segInput.voice_id ?? "zh-CN-XiaoxiaoNeural"; // Default to a common voice
+      const voice = segInput.voice_id ?? "zh-CN-XiaoxiaoMultilingualNeural"; 
       const rate = segInput.speech_rate ?? 25; 
       const pitch = segInput.speech_pitch ?? 0;
       const pause = segInput.pause_after_ms; 
@@ -342,7 +367,7 @@ class EdgeTTSMcpServer {
                   const isLastSubSegment = index === subSegs.length - 1;
                   allSubSegments.push({
                       text: subText,
-                      voice: segInput.voice_id ?? "zh-CN-XiaoxiaoNeural",
+                      voice: segInput.voice_id ?? "zh-CN-XiaoxiaoMultilingualNeural",
                       rate: segInput.speech_rate ?? 25,
                       pitch: segInput.speech_pitch ?? 0,
                       pause: isLastSubSegment ? segInput.pause_after_ms : undefined,
@@ -382,7 +407,7 @@ class EdgeTTSMcpServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("Edge TTS MCP Server (with Expanded Voices) running on stdio");
+    console.error("Edge TTS MCP Server (Robust SSML Support) running on stdio");
   }
 }
 

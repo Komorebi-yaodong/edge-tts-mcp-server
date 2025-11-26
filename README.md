@@ -97,7 +97,7 @@ export URUSAI_API_TOKEN="your_personal_token_here"
     "audio_list": [
       {
         "text": "被转换的具体文本块。",
-        "audio_path": "https://i.urusai.cc/shine.png"
+        "audio_path": "https://i.urusai.cc/shine.mp3"
       }
     ]
   }
