@@ -10,47 +10,53 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import crypto from "node:crypto";
 
-// === 上传模块 ===
+// === 配置常量 ===
 const URUSAI_API_URL = "https://api.urusai.cc/v1/upload";
 
+// === 声音定义 (AI 只需看到 ID，不需要看到复杂的中文描述，这会节省 Token 并减少混淆) ===
+// 仅保留最常用的几个，或者根据需要完整列出，但在 Schema 中必须作为 Enum 提供
+const VOICE_IDS = [
+    "zh-CN-XiaoxiaoMultilingualNeural", // 女/多语言 (默认)
+    "zh-CN-YunyiMultilingualNeural",    // 男/多语言 (默认)
+    "zh-CN-XiaoyouMultilingualNeural",  // 女/萝莉
+    "zh-CN-YunxiNeural",                // 男/清朗
+    "zh-CN-YunfengNeural",              // 男/磁性
+    "zh-CN-XiaomoNeural",               // 女/文艺
+    "zh-CN-XiaohanNeural",              // 女/优雅
+    "zh-CN-YunyangNeural",              // 男/阳光
+    "zh-CN-XiaoxiaoNeural"              // 女/温柔
+] as const;
+
+// 为了代码方便映射，这里保留一个简单的默认值
+const DEFAULT_VOICE = "zh-CN-XiaoxiaoMultilingualNeural";
+
+// === 辅助工具函数 ===
 async function uploadToUrusai(audioBuffer: Buffer, filename: string): Promise<string> {
   const formData = new FormData();
   const audioBlob = new Blob([new Uint8Array(audioBuffer)], { type: "audio/mpeg" });
   formData.append("file", audioBlob, filename);
 
   const apiToken = process.env.URUSAI_API_TOKEN;
-  if (apiToken) {
-    formData.append("token", apiToken);
-  }
+  if (apiToken) formData.append("token", apiToken);
   formData.append("r18", "0");
 
   try {
-    const response = await fetch(URUSAI_API_URL, {
-      method: "POST",
-      body: formData,
-    });
-    if (!response.ok) {
-      throw new Error(`API request failed with status ${response.status}: ${await response.text()}`);
-    }
+    const response = await fetch(URUSAI_API_URL, { method: "POST", body: formData });
+    if (!response.ok) throw new Error(`Upload failed: ${response.statusText}`);
     const result = await response.json();
-    if (result.status === "success" && result.data && result.data.url_direct) {
-      return result.data.url_direct;
-    } else {
-      throw new Error(`API returned an error: ${result.message || JSON.stringify(result)}`);
-    }
+    if (result.status === "success" && result.data?.url_direct) return result.data.url_direct;
+    throw new Error(`Upload API error: ${result.message || JSON.stringify(result)}`);
   } catch (error: any) {
-    console.error(`[Upload Error] Failed to upload to URUSAI!: ${error.message}`);
+    console.error(`[Upload Error] ${error.message}`);
     throw error;
   }
 }
 
-// === 音频合并模块 ===
 function stripId3v2(buffer: Buffer): Buffer {
     if (buffer.length > 10 && buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) {
         const sizeBytes = buffer.slice(6, 10);
         const tagSize = (sizeBytes[0] << 21) | (sizeBytes[1] << 14) | (sizeBytes[2] << 7) | sizeBytes[3];
-        const headerSize = 10;
-        return buffer.slice(headerSize + tagSize);
+        return buffer.slice(10 + tagSize);
     }
     return buffer;
 }
@@ -58,50 +64,12 @@ function stripId3v2(buffer: Buffer): Buffer {
 function mergeMp3Buffers(buffers: Buffer[]): Buffer {
     if (buffers.length === 0) return Buffer.alloc(0);
     if (buffers.length === 1) return buffers[0];
-
-    const firstBuffer = buffers[0];
-    const otherBuffers = buffers.slice(1);
-    const audioFrames = otherBuffers.map(buffer => stripId3v2(buffer));
-    return Buffer.concat([firstBuffer, ...audioFrames]);
+    const frames = buffers.slice(1).map(b => stripId3v2(b));
+    return Buffer.concat([buffers[0], ...frames]);
 }
 
-
-// === 声音列表定义 ===
-const VOICE_MAP: Record<string, string> = {
-    "zh-CN-XiaoxiaoMultilingualNeural": "晓晓 (女/多语言 - 默认)",
-    "zh-CN-Xiaoxiao:DragonHDFlashLatestNeural": "晓晓 (女/高清)",
-    "zh-CN-XiaoshuangMultilingualNeural": "晓双 (女/萝莉/多语言)",
-    "zh-CN-XiaoyouMultilingualNeural": "晓悠 (女/萝莉/多语言)",
-    "zh-CN-XiaochenMultilingualNeural": "晓辰 (女/知性/多语言)",
-    "zh-CN-XiaoyuMultilingualNeural": "晓宇 (女/多语言)",
-    "zh-CN-XiaoyiNeural": "晓伊 (女/甜美)",
-    "zh-CN-XiaomengNeural": "晓梦 (女/梦幻)",
-    "zh-CN-YunyiMultilingualNeural": "云逸 (男/多语言 - 默认)",
-    "zh-CN-YunxiaoMultilingualNeural": "云晓 (男/多语言)",
-    "zh-CN-YunfanMultilingualNeural": "云帆 (男/多语言)",
-    "zh-CN-Yunxiao:DragonHDFlashLatestNeural": "云晓 (男/高清)",
-    "zh-CN-YunxiNeural": "云希 (男/清朗)",
-    "zh-CN-YunfengNeural": "云枫 (男/磁性)",
-    "zh-CN-YunjianNeural": "云健 (男/稳重)",
-    "zh-CN-YunzeNeural": "云泽 (男/深沉)",
-    "zh-CN-YunyeNeural": "云野 (男/野性)",
-    "zh-CN-XiaoxiaoNeural": "晓晓 (女/温柔)",
-    "zh-CN-XiaohanNeural": "晓涵 (女/优雅)",
-    "zh-CN-XiaomoNeural": "晓墨 (女/文艺)",
-    "zh-CN-XiaoqiuNeural": "晓秋 (女/成熟)",
-    "zh-CN-XiaoruiNeural": "晓睿 (女/智慧)",
-    "zh-CN-XiaoxuanNeural": "晓萱 (女/清新)",
-    "zh-CN-XiaoyanNeural": "晓颜 (女/柔美)",
-    "zh-CN-XiaozhenNeural": "晓甄 (女/端庄)",
-    "zh-CN-YunyangNeural": "云扬 (男/阳光)",
-    "zh-CN-YunhaoNeural": "云皓 (男/豪迈)",
-    "zh-CN-YunxiaNeural": "云夏 (男/热情)",
-};
-
-
-// === 辅助工具函数 ===
 function escapeXml(unsafe: string): string {
-    return unsafe.replace(/[<>&'"]/g, (c) => {
+    return unsafe.replace(/[<>&'"]/g, c => {
         switch (c) {
             case '<': return '&lt;';
             case '>': return '&gt;';
@@ -115,39 +83,13 @@ function escapeXml(unsafe: string): string {
 
 function preprocessText(text: string): string {
     if (!text) return "";
-    let clean = text;
-    clean = clean.replace(/[*_`#>]/g, "");
-    clean = clean.replace(/——/g, "，");
-    clean = clean.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
-    return clean.trim();
-}
-
-function getWordCount(text: string): number {
-    if (!text) return 0;
-    const cnMatch = text.match(/[\u4e00-\u9fa5]/g);
-    const cnCount = cnMatch ? cnMatch.length : 0;
-    const textWithoutCn = text.replace(/[\u4e00-\u9fa5]/g, " ");
-    const enMatch = textWithoutCn.match(/[a-zA-Z0-9\u00C0-\u00FF]+/g);
-    const enCount = enMatch ? enMatch.length : 0;
-    return cnCount + enCount;
-}
-
-function splitText(text: string, maxWordCount: number = 500): string[] {
-    if (getWordCount(text) <= maxWordCount) return [text];
-    const rawSentences = text.split(/([。！？；.!?;]+)/);
-    const mergedSegments: string[] = [];
-    let buffer = "";
-    for (let i = 0; i < rawSentences.length; i++) {
-        const part = rawSentences[i];
-        if (getWordCount(buffer + part) < maxWordCount) {
-            buffer += part;
-        } else {
-            if (buffer.trim()) mergedSegments.push(buffer);
-            buffer = part;
-        }
-    }
-    if (buffer.trim()) mergedSegments.push(buffer);
-    return mergedSegments.filter(s => s.trim().length > 0);
+    // 移除 markdown 和潜在的 XML 标签，防止 AI 注入 SSML
+    return text
+        .replace(/<[^>]*>/g, "") // 暴力移除所有 xml tags
+        .replace(/[*_`#>]/g, "")
+        .replace(/——/g, "，")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .trim();
 }
 
 // === Edge TTS Client ===
@@ -167,13 +109,9 @@ class EdgeTTSClient {
     const encodedUrl = encodeURIComponent(url);
     const uuidStr = uuidv4().replace(/-/g, "");
     const formattedDate = new Date().toUTCString().replace(/GMT/, "").trim() + " GMT";
-    
     const bytesToSign = `MSTranslatorAndroidApp${encodedUrl}${formattedDate.toLowerCase()}${uuidStr}`.toLowerCase();
-    const secretKeyBase64 = "oik6PdDdMnOXemTbwvMn9de/h9lFnfBaCWbGMMZqqoSaQaqUOqjVGm5NqsmjcBI1x+sS9ugjB55HEJWRiFXYFw==";
-    const secretKey = Buffer.from(secretKeyBase64, "base64");
-    
-    const signData = this.hmacSha256(secretKey, bytesToSign);
-    return `MSTranslatorAndroidApp::${signData.toString("base64")}::${formattedDate.toLowerCase()}::${uuidStr}`;
+    const secretKey = Buffer.from("oik6PdDdMnOXemTbwvMn9de/h9lFnfBaCWbGMMZqqoSaQaqUOqjVGm5NqsmjcBI1x+sS9ugjB55HEJWRiFXYFw==", "base64");
+    return `MSTranslatorAndroidApp::${this.hmacSha256(secretKey, bytesToSign).toString("base64")}::${formattedDate.toLowerCase()}::${uuidStr}`;
   }
 
   private async getEndpoint() {
@@ -188,14 +126,24 @@ class EdgeTTSClient {
     return await res.json();
   }
   
-  public async getAudio(text: string, voiceName: string, rate: number, pitch: number, pauseAfterMs?: number): Promise<Buffer> {
+  public async getAudio(text: string, voiceName: string, rateStr: string, pitchStr: string, pauseAfterMs: number = 0): Promise<Buffer> {
     if (!this.expiredAt || Date.now() / 1000 > this.expiredAt - 60) {
       this.endpoint = await this.getEndpoint();
       const jwt = this.endpoint.t.split(".")[1];
-      const decodedJwt = JSON.parse(Buffer.from(jwt, 'base64').toString());
-      this.expiredAt = decodedJwt.exp;
+      this.expiredAt = JSON.parse(Buffer.from(jwt, 'base64').toString()).exp;
       this.clientId = uuidv4().replace(/-/g, "");
     }
+    
+    // === 内部转换逻辑：将语义字符串转换为 Edge TTS 具体数值 ===
+    // Normal (25) 实际上是 +25%，Edge TTS 的 0% 有点慢
+    let rate = "+25%"; 
+    if (rateStr === "slow") rate = "+0%";
+    if (rateStr === "fast") rate = "+40%";
+
+    let pitch = "+0Hz";
+    if (pitchStr === "low") pitch = "-10Hz";
+    if (pitchStr === "high") pitch = "+10Hz";
+
     const url = `https://${this.endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
     const headers = {
       "Authorization": this.endpoint.t, 
@@ -204,22 +152,13 @@ class EdgeTTSClient {
       "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3"
     };
 
-    // 格式化参数：确保有+号
-    const fmtRate = rate >= 0 ? `+${rate}%` : `${rate}%`;
-    const fmtPitch = pitch >= 0 ? `+${pitch}%` : `${pitch}%`;
-    
-    // 文本安全转义
     const safeText = escapeXml(text);
+    const breakTag = pauseAfterMs > 0 ? `<break time="${pauseAfterMs}ms"/>` : '';
 
-    const breakTag = (pauseAfterMs && pauseAfterMs > 0)
-      ? `<break time="${pauseAfterMs}ms"/>`
-      : '';
-
-    // 自动封装 SSML
     const ssml = 
       `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN">` +
         `<voice name="${voiceName}">` +
-          `<prosody rate="${fmtRate}" pitch="${fmtPitch}" volume="+0%">` +
+          `<prosody rate="${rate}" pitch="${pitch}" volume="+0%">` +
             `${safeText}` +
           `</prosody>` +
           `${breakTag}` +
@@ -227,38 +166,33 @@ class EdgeTTSClient {
       `</speak>`;
     
     const response = await fetch(url, { method: "POST", headers: headers as any, body: ssml });
-    if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[TTS API Error] Status: ${response.status}, Details: ${errorText}, SSML: ${ssml}`);
-        throw new Error(`TTS API Error ${response.status}: ${errorText}`);
-    }
+    if (!response.ok) throw new Error(`TTS API Error ${response.status}: ${await response.text()}`);
     return Buffer.from(await response.arrayBuffer());
   }
 }
 
+// === MCP 参数接口定义 ===
+interface SpeechItem {
+    text: string;
+    voice: string;
+    speed: "normal" | "slow" | "fast";
+    pitch: "default" | "low" | "high";
+    pause_ms: number;
+}
+
+interface GenerateRequest {
+    items: SpeechItem[];
+    merge_output: boolean; // 提到顶层
+}
+
 // === MCP Server 实现 ===
-interface SpeechSegmentInput {
-  speech_content: string; 
-  voice_id?: string;      
-  speech_rate?: number;   
-  speech_pitch?: number;  
-  merge_audio?: boolean;
-  pause_after_ms?: number;
-}
-
-interface SegmentResult {
-  text: string;
-  audio_list: { text: string; audio_path: string }[];
-  merged_audio_path?: string;
-}
-
 class EdgeTTSMcpServer {
   private server: Server;
   private ttsClient: EdgeTTSClient;
 
   constructor() {
     this.server = new Server(
-      { name: "edge-tts-server", version: "5.1.0-speed-redefined" },
+      { name: "edge-tts-server", version: "2.0.0" },
       { capabilities: { tools: {} } }
     );
     this.ttsClient = new EdgeTTSClient();
@@ -270,172 +204,146 @@ class EdgeTTSMcpServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
-          name: "batch_generate_speech",
-          description: 
-            "Generates speech from plain text, returns public audio URLs. Supports merging multiple segments.\n" +
-            "### INPUT RULES:\n" +
-            "1. **PLAIN TEXT ONLY**: `speech_content` must be plain text. **DO NOT use any XML/SSML tags** (like `<break>`). They will be treated as text.\n" +
-            "2. **Control via Params**: Use `speech_rate`, `speech_pitch`, and `pause_after_ms` to control the voice.\n" +
-            "### SPEED SETTINGS (IMPORTANT):\n" +
-            "The `speech_rate` parameter controls the speed:\n" +
-            "- **25** : **NORMAL / DEFAULT**. (This is 1.25x speed, ideal for podcasts/reading).\n" +
-            "- **0**  : **SLOW**. (Good for sad, serious, or horror scenes).\n" +
-            "- **40** : **FAST**. (Good for excitement).\n" +
-            "### USAGE:\n" +
-            "1. **Merge**: Set `merge_audio: true` on the first segment.\n" +
-            "2. **Pauses**: To add a pause, split text into two segments and use `pause_after_ms` on the first one.",
+          name: "generate_speech",
+          description: "Generate speech audio from text using Microsoft Edge TTS. Supports multi-role conversations and audio merging.",
           inputSchema: {
             type: "object",
             properties: {
-              segments: {
+              merge_output: {
+                type: "boolean",
+                description: "If true, merges all speech items into a single MP3 file. If false, returns separate files."
+              },
+              items: {
                 type: "array",
-                description: "List of speech segment objects.",
+                description: "List of speech segments to generate.",
                 items: {
                   type: "object",
                   properties: {
-                    speech_content: { 
+                    text: { 
                         type: "string", 
-                        description: "The PLAIN TEXT to be spoken. NO XML/SSML tags allowed." 
+                        description: "The text content to speak." 
                     },
-                    voice_id: { type: "string", description: "Optional Voice ID.", enum: Object.keys(VOICE_MAP) },
-                    
-                    speech_rate: { 
+                    voice: { 
+                        type: "string", 
+                        enum: VOICE_IDS, // 直接使用常量数组
+                        description: "Voice character ID. 'Xiaoxiao' is standard female, 'Yunyi' is standard male." 
+                    },
+                    speed: { 
+                        type: "string", 
+                        enum: ["slow", "normal", "fast"],
+                        description: "Speech speed." 
+                    },
+                    pitch: {
+                        type: "string",
+                        enum: ["default", "low", "high"],
+                        description: "Speech pitch/tone."
+                    },
+                    pause_ms: { 
                         type: "number", 
-                        description: "Speed Control: 25=Normal, 0=Slow, 40=Fast. Default: 25." 
-                    },
-                    
-                    speech_pitch: { type: "number", description: "Pitch percentage (e.g., 20 for high pitch). Default: 0." },
-                    pause_after_ms: { type: "number", description: "Silence (in ms) to add AFTER this segment." },
-                    merge_audio: { type: "boolean", description: "Set to true on the first segment to merge all audio." }
+                        description: "Silence duration (milliseconds) AFTER this segment. Default 0." 
+                    }
                   },
-                  required: ["speech_content"]
+                  required: ["text", "voice", "speed", "pitch", "pause_ms"], // 强制所有字段，消除歧义
+                  additionalProperties: false
                 }
               }
             },
-            required: ["segments"],
+            required: ["items", "merge_output"],
+            additionalProperties: false, // 严格模式关键
           },
         },
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === "batch_generate_speech") {
-        return this.handleBatchGenerate(request.params.arguments);
+      if (request.params.name === "generate_speech") {
+        return this.handleGenerate(request.params.arguments as unknown as GenerateRequest);
       }
       throw new McpError(ErrorCode.MethodNotFound, "Tool not found");
     });
   }
 
-  private async handleBatchGenerate(args: any) {
-    if (!args || !Array.isArray(args.segments) || args.segments.length === 0) {
-      throw new McpError(ErrorCode.InvalidParams, "Invalid input: 'segments' array is required.");
+  private async handleGenerate(args: GenerateRequest) {
+    if (!args.items || args.items.length === 0) {
+        throw new McpError(ErrorCode.InvalidParams, "Items array cannot be empty");
     }
+
+    console.error(`[TTS] Processing ${args.items.length} items. Merge: ${args.merge_output}`);
     
-    const segments = args.segments as SpeechSegmentInput[];
-    const totalCount = segments.reduce((acc, cur) => acc + getWordCount(cur.speech_content || ""), 0);
-    if (totalCount > 5000) { 
-        throw new McpError(ErrorCode.InvalidParams, `Total content count (${totalCount}) exceeds limit.`);
-    }
+    // 预处理所有请求
+    const tasks = args.items.map(async (item, idx) => {
+        const text = preprocessText(item.text);
+        if (!text) return null;
 
-    const shouldMerge = segments[0].merge_audio === true;
-    console.error(`[Batch] Processing ${segments.length} segments. Merge mode: ${shouldMerge}`);
-
-    if (shouldMerge) {
-        return this.handleMergedGeneration(segments);
-    } else {
-        return this.handleSeparateGeneration(segments);
-    }
-  }
-
-  private async handleSeparateGeneration(segments: SpeechSegmentInput[]) {
-    const segmentPromises = segments.map(async (segInput, index) => {
-      let textToSpeak = preprocessText(segInput.speech_content);
-      
-      const voice = segInput.voice_id ?? "zh-CN-XiaoxiaoMultilingualNeural"; 
-      
-      // 默认 25
-      const rate = segInput.speech_rate ?? 25; 
-      
-      const pitch = segInput.speech_pitch ?? 0;
-      const pause = segInput.pause_after_ms; 
-
-      const resultObj: Omit<SegmentResult, 'merged_audio_path'> = { text: segInput.speech_content, audio_list: [] };
-      if (!textToSpeak) return resultObj;
-      
-      const subSegments = splitText(textToSpeak, 100);
-      
-      for (const subText of subSegments) {
         try {
-          const audioBuffer = await this.ttsClient.getAudio(subText, voice, rate, pitch, pause);
-          const filename = `tts_separate_${index}_${Date.now()}.mp3`;
-          const audioUrl = await uploadToUrusai(audioBuffer, filename);
-          resultObj.audio_list.push({ text: subText, audio_path: audioUrl });
+            // 使用新版的语义参数 (normal/fast 等)
+            const buffer = await this.ttsClient.getAudio(
+                text, 
+                item.voice || DEFAULT_VOICE, 
+                item.speed || "normal", 
+                item.pitch || "default", 
+                item.pause_ms || 0
+            );
+            return { buffer, text, idx };
         } catch (e: any) {
-          resultObj.audio_list.push({ text: subText, audio_path: "ERROR: " + e.message });
+            console.error(`Error generating item ${idx}: ${e.message}`);
+            return { error: e.message, text, idx };
         }
-      }
-      return resultObj;
     });
-    const finishedSegments = await Promise.all(segmentPromises);
-    return { content: [{ type: "text", text: JSON.stringify(finishedSegments, null, 2) }] };
-  }
-  
-  private async handleMergedGeneration(segments: SpeechSegmentInput[]) {
-      const allSubSegments: { text: string, voice: string, rate: number, pitch: number, pause: number | undefined }[] = [];
-      const originalTexts = segments.map(s => s.speech_content);
 
-      for (const segInput of segments) {
-          let cleanText = preprocessText(segInput.speech_content);
-          if (cleanText) {
-              const subSegs = splitText(cleanText, 100);
-              subSegs.forEach((subText, index) => {
-                  const isLastSubSegment = index === subSegs.length - 1;
-                  allSubSegments.push({
-                      text: subText,
-                      voice: segInput.voice_id ?? "zh-CN-XiaoxiaoMultilingualNeural",
-                      
-                      // 默认 25
-                      rate: segInput.speech_rate ?? 25,
-                      
-                      pitch: segInput.speech_pitch ?? 0,
-                      pause: isLastSubSegment ? segInput.pause_after_ms : undefined,
-                  });
-              });
-          }
-      }
+    const results = (await Promise.all(tasks)).filter(r => r !== null);
 
-      if (allSubSegments.length === 0) {
-        return { content: [{ type: "text", text: JSON.stringify({ text: originalTexts.join('\n'), merged_audio_path: 'NO_CONTENT_TO_GENERATE' }, null, 2) }] };
-      }
-
-      try {
-        const audioBufferPromises = allSubSegments.map(sub => 
-            this.ttsClient.getAudio(sub.text, sub.voice, sub.rate, sub.pitch, sub.pause)
-        );
-        const audioBuffers = await Promise.all(audioBufferPromises);
-
-        const mergedBuffer = mergeMp3Buffers(audioBuffers);
+    // 模式 1: 合并输出
+    if (args.merge_output) {
+        const validBuffers = results
+            .filter((r): r is { buffer: Buffer, text: string, idx: number } => !('error' in r!))
+            .sort((a, b) => a.idx - b.idx)
+            .map(r => r.buffer);
         
-        const filename = `tts_merged_${Date.now()}.mp3`;
-        const mergedUrl = await uploadToUrusai(mergedBuffer, filename);
+        if (validBuffers.length === 0) {
+            return { content: [{ type: "text", text: "Failed to generate any audio segments." }] };
+        }
 
-        const finalResult: SegmentResult = {
-            text: originalTexts.join('\n'),
-            audio_list: [],
-            merged_audio_path: mergedUrl
+        const mergedBuffer = mergeMp3Buffers(validBuffers);
+        const url = await uploadToUrusai(mergedBuffer, `tts_merged_${Date.now()}.mp3`);
+        
+        return {
+            content: [{ 
+                type: "text", 
+                text: JSON.stringify({ 
+                    status: "success", 
+                    mode: "merged", 
+                    url: url,
+                    transcript: results.map(r => r!.text).join("\n") 
+                }, null, 2) 
+            }]
         };
+    } 
+    
+    // 模式 2: 分离输出
+    else {
+        const uploadPromises = results.map(async (res) => {
+            if ('error' in res!) {
+                return { status: "error", text: res.text, error: res.error };
+            }
+            const url = await uploadToUrusai(res.buffer, `tts_seg_${res.idx}_${Date.now()}.mp3`);
+            return { status: "success", text: res.text, url: url };
+        });
         
-        return { content: [{ type: "text", text: JSON.stringify(finalResult, null, 2) }] };
-      } catch (e: any) {
-          console.error(`[Merge Error] Failed during merged generation: ${e.message}`);
-          return { content: [{ type: "text", text: `Batch merge process error: ${e.message}` }], isError: true };
-      }
+        const finalLinks = await Promise.all(uploadPromises);
+        return {
+            content: [{ 
+                type: "text", 
+                text: JSON.stringify(finalLinks, null, 2) 
+            }]
+        };
+    }
   }
 
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("Edge TTS MCP Server (No-SSML & Refined Speed) running on stdio");
+    console.error("Edge TTS MCP Server (Strict Mode) running on stdio");
   }
 }
 
