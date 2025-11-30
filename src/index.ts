@@ -136,8 +136,8 @@ class EdgeTTSClient {
     
     // === 内部转换逻辑：将语义字符串转换为 Edge TTS 具体数值 ===
     // Normal (20) 实际上是 +20%，Edge TTS 的 0% 有点慢
-    let rate = "+20%"; 
-    if (rateStr === "slow") rate = "+0%";
+    let rate = "+0%"; 
+    if (rateStr === "slow") rate = "-40%";
     if (rateStr === "fast") rate = "+40%";
 
     let pitch = "+0Hz";
