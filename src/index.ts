@@ -14,18 +14,51 @@ import crypto from "node:crypto";
 const URUSAI_API_URL = "https://api.urusai.cc/v1/upload";
 
 // === 声音定义 (AI 只需看到 ID，不需要看到复杂的中文描述，这会节省 Token 并减少混淆) ===
-// 仅保留最常用的几个，或者根据需要完整列出，但在 Schema 中必须作为 Enum 提供
-const VOICE_IDS = [
-    "zh-CN-XiaoxiaoMultilingualNeural", // 女/多语言 (默认)
-    "zh-CN-YunyiMultilingualNeural",    // 男/多语言 (默认)
-    "zh-CN-XiaoyouMultilingualNeural",  // 女/萝莉
-    "zh-CN-YunxiNeural",                // 男/清朗
-    "zh-CN-YunfengNeural",              // 男/磁性
-    "zh-CN-XiaomoNeural",               // 女/文艺
-    "zh-CN-XiaohanNeural",              // 女/优雅
-    "zh-CN-YunyangNeural",              // 男/阳光
-    "zh-CN-XiaoxiaoNeural"              // 女/温柔
-] as const;
+const VOICE_MAP: Record<string, string> = {
+    // --- 推荐女声 (默认/高清/多语言/特色) ---
+    "zh-CN-XiaoxiaoMultilingualNeural": "晓晓 (女/多语言 - 默认)",
+    "zh-CN-Xiaoxiao:DragonHDFlashLatestNeural": "晓晓 (女/高清 - 情感更丰富)",
+    "zh-CN-XiaoshuangMultilingualNeural": "晓双 (女/萝莉/多语言)",
+    "zh-CN-XiaoyouMultilingualNeural": "晓悠 (女/萝莉/多语言)",
+    "zh-CN-XiaochenMultilingualNeural": "晓辰 (女/知性/多语言)",
+    "zh-CN-XiaoyuMultilingualNeural": "晓宇 (女/多语言)",
+    "zh-CN-XiaoyiNeural": "晓伊 (女/甜美)",
+    "zh-CN-XiaomengNeural": "晓梦 (女/梦幻)",
+
+    // --- 推荐男声 (默认/高清/多语言/特色) ---
+    "zh-CN-YunyiMultilingualNeural": "云逸 (男/多语言 - 默认)",
+    "zh-CN-YunxiaoMultilingualNeural": "云晓 (男/多语言)",
+    "zh-CN-YunfanMultilingualNeural": "云帆 (男/多语言)",
+    "zh-CN-Yunxiao:DragonHDFlashLatestNeural": "云晓 (男/高清 - 情感更丰富)",
+    "zh-CN-YunxiNeural": "云希 (男/清朗)",
+    "zh-CN-YunfengNeural": "云枫 (男/磁性)",
+    "zh-CN-YunjianNeural": "云健 (男/稳重)",
+    "zh-CN-YunzeNeural": "云泽 (男/深沉)",
+    "zh-CN-YunyeNeural": "云野 (男/野性)",
+
+    // --- 更多女声 ---
+    "zh-CN-XiaoxiaoNeural": "晓晓 (女/温柔)",
+    "zh-CN-XiaohanNeural": "晓涵 (女/优雅)",
+    "zh-CN-XiaomoNeural": "晓墨 (女/文艺)",
+    "zh-CN-XiaoqiuNeural": "晓秋 (女/成熟)",
+    "zh-CN-XiaoruiNeural": "晓睿 (女/智慧)",
+    "zh-CN-XiaoxuanNeural": "晓萱 (女/清新)",
+    "zh-CN-XiaoyanNeural": "晓颜 (女/柔美)",
+    "zh-CN-XiaozhenNeural": "晓甄 (女/端庄)",
+
+    // --- 更多男声 ---
+    "zh-CN-YunyangNeural": "云扬 (男/阳光)",
+    "zh-CN-YunhaoNeural": "云皓 (男/豪迈)",
+    "zh-CN-YunxiaNeural": "云夏 (男/热情)",
+};
+
+// 提取 ID 数组供 Schema 验证使用
+const VOICE_IDS = Object.keys(VOICE_MAP);
+
+// 生成帮助文本，让 AI 知道每个 ID 对应的声音特点
+const VOICE_DESCRIPTION_TEXT = Object.entries(VOICE_MAP)
+  .map(([id, desc]) => `- ${id}: ${desc}`)
+  .join("\n");
 
 // 为了代码方便映射，这里保留一个简单的默认值
 const DEFAULT_VOICE = "zh-CN-XiaoxiaoMultilingualNeural";
@@ -81,11 +114,24 @@ function escapeXml(unsafe: string): string {
     });
 }
 
-function preprocessText(text: string): string {
+function preprocessText(text: string, charName?: string): string {
     if (!text) return "";
-    // 移除 markdown 和潜在的 XML 标签，防止 AI 注入 SSML
-    return text
-        .replace(/<[^>]*>/g, "") // 暴力移除所有 xml tags
+    
+    let cleanText = text;
+
+    // 如果传入了角色名，且文本以 "角色名" + "冒号/空格" 开头，则去除
+    if (charName) {
+        // 转义正则特殊字符，防止名字里带 . * ? 等导致报错
+        const escapedName = charName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // 匹配模式： ^(名字)(任意空白)(中文冒号|英文冒号)(任意空白)
+        const namePrefixRegex = new RegExp(`^${escapedName}\\s*[:：]\\s*`, 'i');
+        cleanText = cleanText.replace(namePrefixRegex, "");
+    } else {
+        cleanText = cleanText.replace(/^[\u4e00-\u9fa5a-zA-Z0-9]{2,10}\s*[:：]\s*/, "");
+    }
+
+    return cleanText
+        .replace(/<[^>]*>/g, "") 
         .replace(/[*_`#>]/g, "")
         .replace(/——/g, "，")
         .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
@@ -135,8 +181,8 @@ class EdgeTTSClient {
     }
     
     // === 内部转换逻辑：将语义字符串转换为 Edge TTS 具体数值 ===
-    // Normal (20) 实际上是 +20%，Edge TTS 的 0% 有点慢
     let rate = "+0%"; 
+    if (rateStr === "normal") rate = "+10%";
     if (rateStr === "slow") rate = "-40%";
     if (rateStr === "fast") rate = "+40%";
 
@@ -173,6 +219,7 @@ class EdgeTTSClient {
 
 // === MCP 参数接口定义 ===
 interface SpeechItem {
+    character_name?: string;
     text: string;
     voice: string;
     speed: "normal" | "slow" | "fast";
@@ -205,7 +252,7 @@ class EdgeTTSMcpServer {
       tools: [
         {
           name: "generate_speech",
-          description: "Generate speech audio from text using Microsoft Edge TTS. Supports multi-role conversations and audio merging.",
+          description: "Generate speech audio from text. Supports multi-role conversations and audio merging.",
           inputSchema: {
             type: "object",
             properties: {
@@ -219,37 +266,41 @@ class EdgeTTSMcpServer {
                 items: {
                   type: "object",
                   properties: {
+                    character_name: {
+                        type: "string",
+                        description: "The name of the character. Optional."
+                    },
                     text: { 
                         type: "string", 
                         description: "The text content to speak." 
                     },
                     voice: { 
                         type: "string", 
-                        enum: VOICE_IDS, // 直接使用常量数组
-                        description: "Voice character ID. 'Xiaoxiao' is standard female, 'Yunyi' is standard male." 
+                        enum: VOICE_IDS,
+                        description: `Voice character ID. Select the most appropriate voice based on the character's persona:\n${VOICE_DESCRIPTION_TEXT}` 
                     },
                     speed: { 
                         type: "string", 
                         enum: ["slow", "normal", "fast"],
-                        description: "Speech speed." 
+                        description: "Speech speed. Default Normal." 
                     },
                     pitch: {
                         type: "string",
                         enum: ["default", "low", "high"],
-                        description: "Speech pitch/tone."
+                        description: "Speech pitch/tone. Default Default."
                     },
                     pause_ms: { 
                         type: "number", 
                         description: "Silence duration (milliseconds) AFTER this segment. Default 0." 
                     }
                   },
-                  required: ["text", "voice", "speed", "pitch", "pause_ms"], // 强制所有字段，消除歧义
+                  required: ["text", "voice", "pause_ms"],
                   additionalProperties: false
                 }
               }
             },
             required: ["items", "merge_output"],
-            additionalProperties: false, // 严格模式关键
+            additionalProperties: false,
           },
         },
       ],
@@ -272,9 +323,9 @@ class EdgeTTSMcpServer {
     
     // 预处理所有请求
     const tasks = args.items.map(async (item, idx) => {
-        const text = preprocessText(item.text);
+        const text = preprocessText(item.text, item.character_name);
         if (!text) return null;
-
+      
         try {
             // 使用新版的语义参数 (normal/fast 等)
             const buffer = await this.ttsClient.getAudio(
