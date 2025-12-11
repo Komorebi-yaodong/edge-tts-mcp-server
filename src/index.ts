@@ -251,7 +251,7 @@ class EdgeTTSMcpServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
-          name: "generate_speech",
+          name: "text_to_speech",
           description: "Generate speech audio from text. Supports multi-role conversations and audio merging.",
           inputSchema: {
             type: "object",
@@ -307,7 +307,7 @@ class EdgeTTSMcpServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name === "generate_speech") {
+      if (request.params.name === "text_to_speech") {
         return this.handleGenerate(request.params.arguments as unknown as GenerateRequest);
       }
       throw new McpError(ErrorCode.MethodNotFound, "Tool not found");
